@@ -1,0 +1,6 @@
+{
+  "name": "Inventory Management System",
+  "description": "A clean corporate inventory tracker allowing employees to request hardware or log complaints, with role-based dashboards for admins and managers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

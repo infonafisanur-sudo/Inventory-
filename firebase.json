@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "rules": "firestore.rules",
+      "database": "ai-studio-inventorymanagem-c5bce93c-0adf-40f6-b6bc-ab716c92d16f"
+    }
+  ]
+}

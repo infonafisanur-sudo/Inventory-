@@ -1,0 +1,155 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Role-based Access Control helpers (RBAC)
+    function getUserRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function hasUserDoc() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return isSignedIn() && hasUserDoc() && getUserRole() == 'admin';
+    }
+
+    function isStoreManager() {
+      return isSignedIn() && hasUserDoc() && (getUserRole() == 'store' || getUserRole() == 'admin');
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Entity validation blueprints
+
+    function isValidUser(data) {
+      return data.id is string && data.id.size() <= 128
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.email is string && data.email.size() > 0 && data.email.size() <= 100
+        && data.role is string && (data.role == 'admin' || data.role == 'store' || data.role == 'user');
+    }
+
+    function isValidItem(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.category is string && data.category.size() > 0 && data.category.size() <= 100
+        && data.quantity is int && data.quantity >= 0;
+    }
+
+    function isValidRequest(data) {
+      return data.user_id is string && data.user_id.size() <= 128
+        && data.item_id is string && data.item_id.size() <= 128
+        && data.status is string && (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected');
+    }
+
+    function isValidAssignedItem(data) {
+      return data.user_id is string && data.user_id.size() <= 128
+        && data.item_id is string && data.item_id.size() <= 128;
+    }
+
+    function isValidComplaint(data) {
+      return data.user_id is string && data.user_id.size() <= 128
+        && data.item_id is string && data.item_id.size() <= 128
+        && data.message is string && data.message.size() > 0 && data.message.size() <= 1000
+        && data.status is string && (data.status == 'pending' || data.status == 'resolved');
+    }
+
+    // ----------------------------------------
+    // COLLECTION RULES
+    // ----------------------------------------
+
+    // 1. Users Collection
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isStoreManager();
+      
+      allow create: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && (incoming().role == 'user' || isAdmin());
+      
+      allow update: if isSignedIn() && (
+        isAdmin() && isValidUser(incoming())
+      ) || (
+        isOwner(userId) && isValidUser(incoming()) && incoming().role == existing().role
+      );
+      
+      allow delete: if isAdmin();
+    }
+
+    // 2. Items Collection
+    match /items/{itemId} {
+      allow read: if isSignedIn();
+      allow create: if isStoreManager() && isValidItem(incoming());
+      allow update: if isStoreManager() && isValidItem(incoming());
+      allow delete: if isStoreManager();
+    }
+
+    // 3. Requests Collection
+    match /requests/{requestId} {
+      allow get: if isSignedIn() && (isOwner(resource.data.user_id) || isStoreManager());
+      allow list: if isSignedIn() && (isStoreManager() || resource.data.user_id == request.auth.uid);
+
+      allow create: if isSignedIn() && (
+        (isOwner(incoming().user_id) && incoming().status == 'pending' && isValidRequest(incoming()))
+        || (isStoreManager() && isValidRequest(incoming()))
+      );
+
+      allow update: if isSignedIn() && (
+        isStoreManager() && isValidRequest(incoming())
+        || (isOwner(existing().user_id) && incoming().status == 'rejected' && existing().status == 'pending' && incoming().user_id == existing().user_id && incoming().item_id == existing().item_id && isValidRequest(incoming()))
+      );
+
+      allow delete: if isStoreManager() || (isSignedIn() && isOwner(resource.data.user_id) && resource.data.status == 'pending');
+    }
+
+    // 4. Assigned Items Collection
+    match /assigned_items/{assignmentId} {
+      allow get: if isSignedIn() && (isOwner(resource.data.user_id) || isStoreManager());
+      allow list: if isSignedIn() && (isStoreManager() || resource.data.user_id == request.auth.uid);
+
+      allow create: if isStoreManager() && isValidAssignedItem(incoming());
+      allow update: if isStoreManager() && isValidAssignedItem(incoming());
+      allow delete: if isStoreManager();
+    }
+
+    // 5. Complaints Collection
+    match /complaints/{complaintId} {
+      allow get: if isSignedIn() && (isOwner(resource.data.user_id) || isStoreManager());
+      allow list: if isSignedIn() && (isStoreManager() || resource.data.user_id == request.auth.uid);
+
+      allow create: if isSignedIn() && (
+        (isOwner(incoming().user_id) && incoming().status == 'pending' && isValidComplaint(incoming()))
+        || isStoreManager() && isValidComplaint(incoming())
+      );
+
+      allow update: if isSignedIn() && (
+        isStoreManager() && isValidComplaint(incoming())
+        || (isOwner(existing().user_id) && incoming().status == existing().status && incoming().user_id == existing().user_id && incoming().item_id == existing().item_id && isValidComplaint(incoming()))
+      );
+
+      allow delete: if isStoreManager() || (isSignedIn() && isOwner(resource.data.user_id) && resource.data.status == 'pending');
+    }
+  }
+}

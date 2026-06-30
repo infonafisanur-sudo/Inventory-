@@ -1,0 +1,87 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "store", "user"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "email", "role"]
+    },
+    "Item": {
+      "title": "Item",
+      "description": "Inventory item details",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "quantity": { "type": "integer" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "category", "quantity"]
+    },
+    "Request": {
+      "title": "Request",
+      "description": "Item requisition or reservation request",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "item_id": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "item_id", "status"]
+    },
+    "AssignedItem": {
+      "title": "AssignedItem",
+      "description": "Item assigned to a user",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "item_id": { "type": "string" },
+        "assigned_date": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "item_id", "assigned_date"]
+    },
+    "Complaint": {
+      "title": "Complaint",
+      "description": "Complaint submitted for an item",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string" },
+        "item_id": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "resolved"] },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "item_id", "message", "status"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and roles"
+    },
+    "items/{itemId}": {
+      "schema": "Item",
+      "description": "Inventory items"
+    },
+    "requests/{requestId}": {
+      "schema": "Request",
+      "description": "Requisition and reservation requests"
+    },
+    "assigned_items/{assignmentId}": {
+      "schema": "AssignedItem",
+      "description": "Assigned equipment"
+    },
+    "complaints/{complaintId}": {
+      "schema": "Complaint",
+      "description": "Employee complaints about equipment"
+    }
+  }
+}
