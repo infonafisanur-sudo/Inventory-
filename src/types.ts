@@ -6,6 +6,7 @@ export interface User {
   email: string;
   role: UserRole;
   created_at?: string;
+  is_local_fallback?: boolean;
 }
 
 export interface Item {
@@ -41,8 +42,10 @@ export interface Complaint {
   user_id: string;
   item_id: string;
   message: string;
-  status: 'pending' | 'resolved';
+  status: 'pending' | 'resolved' | 'unsolved';
   created_at?: string;
+  admin_feedback?: string;
+  resolved_at?: string;
   // Joined fields for UI convenience
   user?: User;
   item?: Item;

@@ -29,6 +29,11 @@ export default function UserDashboard() {
   const [complaintMessage, setComplaintMessage] = useState('');
   const [submittingComplaint, setSubmittingComplaint] = useState(false);
 
+  // General Support Ticket / Complaint form states
+  const [generalReportItemId, setGeneralReportItemId] = useState('');
+  const [generalReportMessage, setGeneralReportMessage] = useState('');
+  const [submittingGeneralReport, setSubmittingGeneralReport] = useState(false);
+
   const loadData = useCallback(async (isRefresh = false) => {
     if (!user) return;
     if (isRefresh) setRefreshing(true);
@@ -96,6 +101,25 @@ export default function UserDashboard() {
       toast('Failed to record technical complaint', 'error');
     } finally {
       setSubmittingComplaint(false);
+    }
+  };
+
+  const handleGeneralReportSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !generalReportMessage.trim()) return;
+
+    setSubmittingGeneralReport(true);
+    try {
+      const selectedId = generalReportItemId || 'general-issue';
+      await dbService.submitComplaint(user.id, selectedId, generalReportMessage.trim());
+      toast('Support ticket successfully filed. The Admin Desk has been notified!', 'success');
+      setGeneralReportItemId('');
+      setGeneralReportMessage('');
+      loadData();
+    } catch (err: any) {
+      toast('Failed to submit support ticket', 'error');
+    } finally {
+      setSubmittingGeneralReport(false);
     }
   };
 
@@ -243,34 +267,64 @@ export default function UserDashboard() {
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-                {complaints.map((comp) => (
-                  <div key={comp.id} className="p-6 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h4 className="font-bold text-slate-900 text-sm">{comp.item?.name || 'Device Asset'}</h4>
-                      <span
-                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold border ${
-                          comp.status === 'resolved'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                            : 'bg-amber-50 text-amber-700 border-amber-100'
-                        }`}
-                      >
-                        {comp.status === 'resolved' ? (
-                          <>
-                            <CheckCircle className="w-3.5 h-3.5" /> Resolved
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className="w-3.5 h-3.5 animate-pulse" /> Pending
-                          </>
-                        )}
-                      </span>
+                {complaints.map((comp) => {
+                  const isPending = comp.status === 'pending';
+                  const isResolved = comp.status === 'resolved';
+                  const isUnsolved = comp.status === 'unsolved';
+
+                  return (
+                    <div key={comp.id} className="p-6 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-slate-900 text-sm">{comp.item?.name || 'Device Asset'}</h4>
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                            isResolved
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                              : isUnsolved
+                              ? 'bg-rose-50 text-rose-700 border-rose-100'
+                              : 'bg-amber-50 text-amber-700 border-amber-100'
+                          }`}
+                        >
+                          {isResolved && (
+                            <>
+                              <CheckCircle className="w-3.5 h-3.5" /> Solved
+                            </>
+                          )}
+                          {isUnsolved && (
+                            <>
+                              <AlertCircle className="w-3.5 h-3.5" /> Cannot Solve
+                            </>
+                          )}
+                          {isPending && (
+                            <>
+                              <AlertCircle className="w-3.5 h-3.5 animate-pulse" /> Pending
+                            </>
+                          )}
+                        </span>
+                      </div>
+                      <p className="text-slate-600 text-sm leading-relaxed">{comp.message}</p>
+                      
+                      {/* Admin Feedback Display */}
+                      {comp.admin_feedback && (
+                        <div className={`p-3.5 rounded-xl border text-xs leading-relaxed ${isResolved ? 'bg-emerald-50/40 border-emerald-100 text-emerald-900' : 'bg-rose-50/40 border-rose-100 text-rose-900'}`}>
+                          <div className="font-bold uppercase tracking-wider text-[10px] text-slate-500 mb-1 flex items-center gap-1">
+                            <span>Admin Resolution Feedback:</span>
+                          </div>
+                          <p className="italic text-slate-700 font-medium">"{comp.admin_feedback}"</p>
+                          {comp.resolved_at && (
+                            <div className="text-[9px] text-slate-400 mt-1 font-mono">
+                              Responded on: {new Date(comp.resolved_at).toLocaleDateString(undefined, { dateStyle: 'medium' })} {new Date(comp.resolved_at).toLocaleTimeString()}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <p className="text-slate-400 text-[10px] font-mono">
+                        Ticket logged on: {comp.created_at ? new Date(comp.created_at).toLocaleString() : 'N/A'}
+                      </p>
                     </div>
-                    <p className="text-slate-600 text-sm leading-relaxed">{comp.message}</p>
-                    <p className="text-slate-400 text-xs font-mono">
-                      Ticket logged on: {comp.created_at ? new Date(comp.created_at).toLocaleString() : 'N/A'}
-                    </p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -312,6 +366,53 @@ export default function UserDashboard() {
               >
                 <Send className="w-4 h-4" />
                 {submittingRequest ? 'Submitting...' : 'Submit Requisition'}
+              </button>
+            </form>
+          </section>
+
+          {/* Report General Support Ticket / Fault Section */}
+          <section className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+            <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+              <AlertCircle className="w-5 h-5 text-rose-600" />
+              <h2 className="font-bold text-slate-900 font-sans text-lg">Report Fault / Ticket</h2>
+            </div>
+
+            <form onSubmit={handleGeneralReportSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Affected Asset / Scope</label>
+                <select
+                  value={generalReportItemId}
+                  onChange={(e) => setGeneralReportItemId(e.target.value)}
+                  className="block w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+                >
+                  <option value="">General Issue (No Specific Device)</option>
+                  {items.map((i) => (
+                    <option key={i.id} value={i.id}>
+                      {i.name} ({i.category})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Issue / Fault Details</label>
+                <textarea
+                  required
+                  rows={3}
+                  value={generalReportMessage}
+                  onChange={(e) => setGeneralReportMessage(e.target.value)}
+                  placeholder="Describe the issue, fault, or technical request in detail for the Administrator..."
+                  className="block w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600 resize-none placeholder-slate-400"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={submittingGeneralReport || !generalReportMessage.trim()}
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-semibold shadow-sm transition-all cursor-pointer disabled:opacity-40"
+              >
+                <MessageSquare className="w-4 h-4" />
+                {submittingGeneralReport ? 'Filing Ticket...' : 'File Support Ticket'}
               </button>
             </form>
           </section>

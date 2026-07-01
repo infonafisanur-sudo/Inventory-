@@ -13,7 +13,9 @@ import {
   X,
   User as UserIcon,
   Database,
-  Briefcase
+  Briefcase,
+  BadgeHelp,
+  AlertTriangle
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -31,10 +33,10 @@ export default function DashboardLayout({ activeTab, setActiveTab, children }: D
 
   // Filter tabs based on roles
   const menuItems = [
-    { id: 'user', label: 'Employee Portal', icon: Briefcase, roles: ['user', 'store', 'admin'] },
-    { id: 'store', label: 'Store Manager', icon: Package, roles: ['store', 'admin'] },
+    { id: 'user', label: 'Employee Portal', icon: Briefcase, roles: ['user', 'admin'] },
+    { id: 'store', label: 'Inventory Desk', icon: Package, roles: ['admin'] },
+    { id: 'tickets', label: 'Support Tickets', icon: BadgeHelp, roles: ['admin'] },
     { id: 'admin', label: 'Admin Desk', icon: UserCog, roles: ['admin'] },
-    { id: 'guide', label: 'Setup Guide & SQL', icon: BookOpen, roles: ['user', 'store', 'admin'] },
   ];
 
   const visibleMenuItems = menuItems.filter((item) => item.roles.includes(user.role));
@@ -42,9 +44,8 @@ export default function DashboardLayout({ activeTab, setActiveTab, children }: D
   const getRoleLabel = (role: UserRole) => {
     switch (role) {
       case 'admin':
-        return 'Administrator';
       case 'store':
-        return 'Store Manager';
+        return 'Administrator';
       case 'user':
         return 'Employee';
       default:
@@ -169,7 +170,7 @@ export default function DashboardLayout({ activeTab, setActiveTab, children }: D
         </AnimatePresence>
 
         {/* Database Sync Banner indicator */}
-        <div className="bg-slate-50 px-6 sm:px-8 pt-4">
+        <div className="bg-slate-50 px-6 sm:px-8 pt-4 flex flex-col gap-3">
           <div className={`p-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border ${
             isFirebaseConfigured
               ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
@@ -191,6 +192,40 @@ export default function DashboardLayout({ activeTab, setActiveTab, children }: D
               </span>
             </div>
           </div>
+
+          {user?.is_local_fallback && (
+            <motion.div 
+              initial={{ opacity: 0, y: -5 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs"
+            >
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="font-bold text-sm text-amber-950">Action Required: Enable Email/Password Auth in Firebase</h4>
+                  <p className="text-xs text-amber-800 mt-1 leading-relaxed">
+                    Firebase authentication failed with <code className="font-mono bg-amber-100 px-1 py-0.2 rounded text-amber-950">auth/operation-not-allowed</code> because the Email/Password sign-in method is disabled. 
+                    The app is currently falling back to <strong className="font-semibold">Local Storage mode</strong>. To enable cloud-synced logins:
+                  </p>
+                  <ol className="list-decimal pl-4 mt-2 text-xs text-amber-800 space-y-1">
+                    <li>Open the Authentication console using the link on the right.</li>
+                    <li>Click <strong className="font-semibold">Email/Password</strong> under sign-in providers and toggle the enable switch.</li>
+                    <li>Click <strong className="font-semibold">Save</strong>. You can then register and sync data to Firestore.</li>
+                  </ol>
+                </div>
+              </div>
+              <div className="shrink-0 flex items-center">
+                <a
+                  href="https://console.firebase.google.com/project/luminous-scheme-t5jvd/authentication/providers"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 active:bg-amber-800 rounded-lg shadow-sm transition-all whitespace-nowrap cursor-pointer"
+                >
+                  Configure Firebase Auth ↗
+                </a>
+              </div>
+            </motion.div>
+          )}
         </div>
 
         {/* Active Tab Screen Area */}

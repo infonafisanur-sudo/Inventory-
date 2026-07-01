@@ -33,6 +33,28 @@ export default function ManagerDashboard() {
   // Processing Request IDs (for loading state)
   const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
 
+  // Custom Confirmation Dialog State
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  const requestConfirm = (title: string, message: string, confirmText: string, onConfirm: () => void) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      confirmText,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmModal(null);
+      }
+    });
+  };
+
   const loadData = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
@@ -77,15 +99,20 @@ export default function ManagerDashboard() {
   };
 
   const handleDeleteItem = async (itemId: string, name: string) => {
-    if (!confirm(`Are you sure you want to permanently delete "${name}" from the inventory?`)) return;
-
-    try {
-      await dbService.deleteItem(itemId);
-      toast(`Removed "${name}" from inventory`, 'info');
-      loadData();
-    } catch (err) {
-      toast('Failed to delete item', 'error');
-    }
+    requestConfirm(
+      'Delete Inventory Item',
+      `Are you sure you want to permanently delete "${name}" from the inventory?`,
+      'Delete Item',
+      async () => {
+        try {
+          await dbService.deleteItem(itemId);
+          toast(`Removed "${name}" from inventory`, 'info');
+          loadData();
+        } catch (err) {
+          toast('Failed to delete item', 'error');
+        }
+      }
+    );
   };
 
   const startEditStock = (item: Item) => {
@@ -150,7 +177,7 @@ export default function ManagerDashboard() {
       {/* Top Section */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 font-sans">Store Manager Dashboard</h1>
+          <h1 className="text-2xl font-bold text-slate-900 font-sans">Inventory & Requests Desk</h1>
           <p className="text-slate-500 text-sm">Control company inventory quantities and review incoming user equipment requests.</p>
         </div>
         <div className="flex items-center gap-3">
@@ -458,6 +485,41 @@ export default function ManagerDashboard() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Custom Confirmation Modal */}
+      {confirmModal && confirmModal.isOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-white rounded-2xl max-w-md w-full shadow-xl overflow-hidden border border-slate-100"
+          >
+            <div className="p-6">
+              <h3 className="text-lg font-bold text-slate-900 mb-2">{confirmModal.title}</h3>
+              <p className="text-slate-500 text-sm leading-relaxed">{confirmModal.message}</p>
+            </div>
+            <div className="p-6 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-750 text-sm font-semibold rounded-xl transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  confirmModal.onConfirm();
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold rounded-xl shadow-xs transition-all cursor-pointer"
+              >
+                {confirmModal.confirmText}
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }

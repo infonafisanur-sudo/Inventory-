@@ -6,7 +6,6 @@ import DashboardLayout from './components/DashboardLayout';
 import UserDashboard from './components/UserDashboard';
 import ManagerDashboard from './components/ManagerDashboard';
 import AdminDashboard from './components/AdminDashboard';
-import SetupGuide from './components/SetupGuide';
 import { RefreshCw } from 'lucide-react';
 
 function AppContent() {
@@ -19,6 +18,10 @@ function AppContent() {
 
     // If active tab is 'store' but user role is only 'user', reset to 'user' portal
     if (activeTab === 'store' && user.role === 'user') {
+      setActiveTab('user');
+    }
+    // If active tab is 'tickets' but user role is not 'admin', reset to 'user' portal
+    if (activeTab === 'tickets' && user.role !== 'admin') {
       setActiveTab('user');
     }
     // If active tab is 'admin' but user role is not 'admin', reset to 'user' portal
@@ -47,8 +50,8 @@ function AppContent() {
     <DashboardLayout activeTab={activeTab} setActiveTab={setActiveTab}>
       {activeTab === 'user' && <UserDashboard />}
       {activeTab === 'store' && <ManagerDashboard />}
-      {activeTab === 'admin' && <AdminDashboard />}
-      {activeTab === 'guide' && <SetupGuide />}
+      {activeTab === 'tickets' && <AdminDashboard defaultTab="complaints" />}
+      {activeTab === 'admin' && <AdminDashboard defaultTab="users" />}
     </DashboardLayout>
   );
 }

@@ -3,7 +3,9 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   signOut,
-  onAuthStateChanged
+  onAuthStateChanged,
+  GoogleAuthProvider,
+  signInWithPopup
 } from 'firebase/auth';
 import { 
   doc, 
@@ -81,17 +83,7 @@ onAuthStateChanged(auth, () => {
 
 function shouldUseFirebaseSync(): boolean {
   if (!isFirebaseConfigured) return false;
-  try {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEYS.CURRENT_USER);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed.id?.startsWith('demo-') || parsed.id?.startsWith('local-')) {
-        return false;
-      }
-    }
-  } catch {
-    return false;
-  }
+  if (!auth.currentUser) return false; // Must have an active Firebase Auth user session to sync
   return true;
 }
 
@@ -187,6 +179,73 @@ function setLocalData<T>(key: string, data: T[]): void {
 // Simple simulated delay
 const delay = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function migrateUserIfNeeded(authUid: string, email: string): Promise<void> {
+  if (!email) return;
+  try {
+    const q = query(collection(firestore, 'users'), where('email', '==', email.toLowerCase()));
+    const qSnap = await getDocs(q);
+    
+    // Check if there's an existing user document with a different ID
+    const oldUserDoc = qSnap.docs.find(doc => doc.id !== authUid);
+    if (oldUserDoc) {
+      const oldId = oldUserDoc.id;
+      const userData = oldUserDoc.data() as User;
+      
+      console.log(`Migrating user data for ${email} from old ID ${oldId} to new Auth UID ${authUid}`);
+      
+      // 1. Create new user document
+      const newUser: User = {
+        ...userData,
+        id: authUid
+      };
+      await setDoc(doc(firestore, 'users', authUid), newUser);
+      
+      // 2. Migrate requests
+      const requestsSnap = await getDocs(query(collection(firestore, 'requests'), where('user_id', '==', oldId)));
+      for (const reqDoc of requestsSnap.docs) {
+        await updateDoc(doc(firestore, 'requests', reqDoc.id), { user_id: authUid });
+      }
+      
+      // 3. Migrate assigned_items
+      const assignedSnap = await getDocs(query(collection(firestore, 'assigned_items'), where('user_id', '==', oldId)));
+      for (const assignDoc of assignedSnap.docs) {
+        await updateDoc(doc(firestore, 'assigned_items', assignDoc.id), { user_id: authUid });
+      }
+      
+      // 4. Migrate complaints
+      const complaintsSnap = await getDocs(query(collection(firestore, 'complaints'), where('user_id', '==', oldId)));
+      for (const compDoc of complaintsSnap.docs) {
+        await updateDoc(doc(firestore, 'complaints', compDoc.id), { user_id: authUid });
+      }
+      
+      // 5. Delete old user document
+      await deleteDoc(doc(firestore, 'users', oldId));
+    }
+  } catch (err) {
+    console.error('Error during user ID migration in Firestore:', err);
+  }
+}
+
+function mergeUsersList(firestoreUsers: User[], localUsers: User[]): User[] {
+  const mergedMap = new Map<string, User>();
+  
+  // 1. Add all local users to map first (normalized key is email in lowercase)
+  for (const u of localUsers) {
+    if (u.email) {
+      mergedMap.set(u.email.toLowerCase(), u);
+    }
+  }
+  
+  // 2. Add/overwrite with Firestore users as the primary source of truth
+  for (const u of firestoreUsers) {
+    if (u.email) {
+      mergedMap.set(u.email.toLowerCase(), u);
+    }
+  }
+  
+  return Array.from(mergedMap.values());
+}
+
 // ==========================================
 // UNIFIED DATABASE & AUTHENTICATION SERVICE
 // ==========================================
@@ -205,13 +264,30 @@ export const dbService = {
     const stored = localStorage.getItem(LOCAL_STORAGE_KEYS.CURRENT_USER);
     if (stored) {
       const parsed = JSON.parse(stored);
-      // Verify with firebase current user if online and not a demo/local user
-      if (isFirebaseConfigured && auth.currentUser && !parsed.id?.startsWith('demo-') && !parsed.id?.startsWith('local-')) {
+      // Verify with firebase current user if online
+      if (isFirebaseConfigured && auth.currentUser) {
+        await migrateUserIfNeeded(auth.currentUser.uid, auth.currentUser.email || '');
         const userDoc = await getDoc(doc(firestore, 'users', auth.currentUser.uid));
         if (userDoc.exists()) {
           const freshUser = userDoc.data() as User;
           localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(freshUser));
           return freshUser;
+        } else {
+          // Document does not exist in Firestore, create it using cached localStorage data!
+          const newUser: User = {
+            id: auth.currentUser.uid,
+            name: parsed.name || auth.currentUser.displayName || auth.currentUser.email?.split('@')[0] || 'Employee',
+            email: auth.currentUser.email || parsed.email || '',
+            role: parsed.role || 'user',
+            created_at: parsed.created_at || new Date().toISOString(),
+          };
+          try {
+            await setDoc(doc(firestore, 'users', auth.currentUser.uid), newUser);
+            localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(newUser));
+            return newUser;
+          } catch (e) {
+            console.error('Failed to auto-create missing user doc in Firestore:', e);
+          }
         }
       }
       return parsed;
@@ -224,12 +300,22 @@ export const dbService = {
         localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(freshUser));
         return freshUser;
       }
-      return {
+      // Auto-create missing user document in Firestore!
+      const defaultUser: User = {
         id: auth.currentUser.uid,
-        name: auth.currentUser.displayName || 'Employee',
+        name: auth.currentUser.displayName || auth.currentUser.email?.split('@')[0] || 'Employee',
         email: auth.currentUser.email || '',
         role: 'user',
+        created_at: new Date().toISOString(),
       };
+      try {
+        await setDoc(doc(firestore, 'users', auth.currentUser.uid), defaultUser);
+        localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(defaultUser));
+        return defaultUser;
+      } catch (e) {
+        console.error('Failed to auto-create missing user doc on auth init:', e);
+        return defaultUser;
+      }
     }
     return null;
   },
@@ -243,6 +329,8 @@ export const dbService = {
       try {
         const userCredential = await signInWithEmailAndPassword(auth, email, password_raw);
         const authUser = userCredential.user;
+
+        await migrateUserIfNeeded(authUser.uid, email);
 
         const userDoc = await getDoc(doc(firestore, 'users', authUser.uid));
         let loggedInUser: User;
@@ -289,6 +377,8 @@ export const dbService = {
             const userCredential = await createUserWithEmailAndPassword(auth, email, password_raw);
             const authUser = userCredential.user;
 
+            await migrateUserIfNeeded(authUser.uid, email);
+
             const newUser: User = {
               id: authUser.uid,
               name: demoName,
@@ -308,6 +398,7 @@ export const dbService = {
               email: email,
               role: demoRole,
               created_at: new Date().toISOString(),
+              is_local_fallback: true,
             };
             localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(localUser));
             return localUser;
@@ -342,6 +433,8 @@ export const dbService = {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password_raw);
         const authUser = userCredential.user;
 
+        await migrateUserIfNeeded(authUser.uid, email);
+
         const newUser: User = {
           id: authUser.uid,
           name,
@@ -367,6 +460,7 @@ export const dbService = {
           email,
           role: 'user',
           created_at: new Date().toISOString(),
+          is_local_fallback: true,
         };
 
         users.push(newUser);
@@ -395,6 +489,173 @@ export const dbService = {
     }
   },
 
+  async signInWithGoogle(simulatedEmail?: string, simulatedRole?: UserRole, simulatedName?: string): Promise<User> {
+    if (isFirebaseConfigured) {
+      if (!simulatedEmail) {
+        try {
+          const provider = new GoogleAuthProvider();
+          const result = await signInWithPopup(auth, provider);
+          const authUser = result.user;
+          const lowerEmail = authUser.email?.toLowerCase() || '';
+
+          await migrateUserIfNeeded(authUser.uid, lowerEmail);
+
+          const userDoc = await getDoc(doc(firestore, 'users', authUser.uid));
+          let loggedInUser: User;
+
+          if (!userDoc.exists()) {
+            // Determine starting role: admin for jenkins/admin, store for david/manager, user otherwise
+            let role: UserRole = 'user';
+            let name = authUser.displayName || authUser.email?.split('@')[0] || 'Employee';
+            
+            if (lowerEmail === 'admin@company.com') {
+              role = 'admin';
+              name = 'Sarah Jenkins';
+            } else if (lowerEmail === 'manager@company.com') {
+              role = 'store';
+              name = 'David Miller';
+            }
+
+            loggedInUser = {
+              id: authUser.uid,
+              name,
+              email: lowerEmail,
+              role,
+              created_at: new Date().toISOString(),
+            };
+            await setDoc(doc(firestore, 'users', authUser.uid), loggedInUser);
+          } else {
+            loggedInUser = userDoc.data() as User;
+          }
+
+          localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(loggedInUser));
+
+          // Sync into local users list so they are visible if admin is logged in locally
+          const users = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+          const existingIndex = users.findIndex(u => u.email.toLowerCase() === lowerEmail);
+          if (existingIndex >= 0) {
+            users[existingIndex] = { ...users[existingIndex], id: authUser.uid, name: loggedInUser.name, role: loggedInUser.role };
+          } else {
+            users.push(loggedInUser);
+          }
+          setLocalData(LOCAL_STORAGE_KEYS.USERS, users);
+
+          return loggedInUser;
+        } catch (err: any) {
+          console.error('Firebase Google Auth failed, throwing so UI can fallback/show simulator:', err);
+          throw err;
+        }
+      } else {
+        // Corporate bypass or custom profile: attempt real sign-in/up via Firebase with default password
+        const lowerEmail = simulatedEmail.toLowerCase();
+        const targetName = simulatedName || (lowerEmail === 'admin@company.com' ? 'Sarah Jenkins' : lowerEmail === 'manager@company.com' ? 'David Miller' : 'Alex Rivera');
+        const targetRole = simulatedRole || (lowerEmail === 'admin@company.com' ? 'admin' : lowerEmail === 'manager@company.com' ? 'store' : 'user');
+
+        try {
+          let userCredential;
+          try {
+            userCredential = await signInWithEmailAndPassword(auth, lowerEmail, 'password123');
+          } catch (signInErr: any) {
+            if (
+              signInErr.code === 'auth/user-not-found' || 
+              signInErr.code === 'auth/invalid-credential' || 
+              signInErr.code === 'auth/invalid-email' || 
+              signInErr.message?.includes('INVALID_LOGIN_CREDENTIALS') || 
+              signInErr.message?.includes('not found')
+            ) {
+              userCredential = await createUserWithEmailAndPassword(auth, lowerEmail, 'password123');
+            } else {
+              throw signInErr;
+            }
+          }
+
+          const authUser = userCredential.user;
+          await migrateUserIfNeeded(authUser.uid, lowerEmail);
+
+          const userDoc = await getDoc(doc(firestore, 'users', authUser.uid));
+          let loggedInUser: User;
+
+          if (!userDoc.exists()) {
+            loggedInUser = {
+              id: authUser.uid,
+              name: targetName,
+              email: lowerEmail,
+              role: targetRole,
+              created_at: new Date().toISOString(),
+            };
+            await setDoc(doc(firestore, 'users', authUser.uid), loggedInUser);
+          } else {
+            loggedInUser = userDoc.data() as User;
+            // Keep role / name accurate to chosen bypass button
+            if (loggedInUser.role !== targetRole || loggedInUser.name !== targetName) {
+              loggedInUser.role = targetRole;
+              loggedInUser.name = targetName;
+              await setDoc(doc(firestore, 'users', authUser.uid), loggedInUser);
+            }
+          }
+
+          localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(loggedInUser));
+
+          // Sync local storage list
+          const users = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+          const existingIndex = users.findIndex(u => u.email.toLowerCase() === lowerEmail);
+          if (existingIndex >= 0) {
+            users[existingIndex] = { ...users[existingIndex], id: authUser.uid, name: loggedInUser.name, role: loggedInUser.role };
+          } else {
+            users.push(loggedInUser);
+          }
+          setLocalData(LOCAL_STORAGE_KEYS.USERS, users);
+
+          return loggedInUser;
+        } catch (err: any) {
+          console.warn('Real firebase login for sandbox profile failed, falling back to local simulation:', err);
+          
+          const localUser: User = {
+            id: `google-sim-${lowerEmail.split('@')[0]}`,
+            name: targetName,
+            email: lowerEmail,
+            role: targetRole,
+            created_at: new Date().toISOString(),
+            is_local_fallback: true,
+          };
+
+          const users = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+          if (!users.some(u => u.email.toLowerCase() === lowerEmail)) {
+            users.push(localUser);
+            setLocalData(LOCAL_STORAGE_KEYS.USERS, users);
+          }
+
+          localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(localUser));
+          return localUser;
+        }
+      }
+    } else {
+      // Local/Simulated Google Sign-In (e.g. if we choose a profile, or firebase is disabled, or popup is blocked)
+      const targetEmail = simulatedEmail || 'employee@company.com';
+      const targetName = simulatedName || (targetEmail === 'admin@company.com' ? 'Sarah Jenkins' : targetEmail === 'manager@company.com' ? 'David Miller' : 'Alex Rivera');
+      const targetRole = simulatedRole || (targetEmail === 'admin@company.com' ? 'admin' : targetEmail === 'manager@company.com' ? 'store' : 'user');
+
+      const localUser: User = {
+        id: `google-sim-${targetEmail.split('@')[0]}`,
+        name: targetName,
+        email: targetEmail,
+        role: targetRole,
+        created_at: new Date().toISOString(),
+        is_local_fallback: true,
+      };
+
+      // Also register in local list if not present
+      const users = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+      if (!users.some(u => u.email.toLowerCase() === targetEmail.toLowerCase())) {
+        users.push(localUser);
+        setLocalData(LOCAL_STORAGE_KEYS.USERS, users);
+      }
+
+      localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(localUser));
+      return localUser;
+    }
+  },
+
   async logout(): Promise<void> {
     await delay(100);
     if (isFirebaseConfigured) {
@@ -413,67 +674,113 @@ export const dbService = {
 
   async getAllUsers(): Promise<User[]> {
     await delay(150);
+    const localUsers = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+
     if (shouldUseFirebaseSync()) {
       try {
         const usersCol = collection(firestore, 'users');
         const qSnap = await getDocs(usersCol);
         
-        // If Firestore users collection is empty, sync default users
-        if (qSnap.empty) {
-          const batchPromises = DEFAULT_USERS.map(u => 
+        // Ensure default users exist in Firestore
+        const existingIds = new Set(qSnap.docs.map(doc => doc.id));
+        const missingUsers = DEFAULT_USERS.filter(u => !existingIds.has(u.id));
+        if (missingUsers.length > 0) {
+          const batchPromises = missingUsers.map(u => 
             setDoc(doc(firestore, 'users', u.id), u)
           );
           await Promise.all(batchPromises);
           const reSnap = await getDocs(usersCol);
-          return reSnap.docs.map(doc => doc.data() as User);
+          const firestoreUsers = reSnap.docs.map(doc => doc.data() as User);
+          return mergeUsersList(firestoreUsers, localUsers);
         }
         
-        return qSnap.docs.map(doc => doc.data() as User);
+        const firestoreUsers = qSnap.docs.map(doc => doc.data() as User);
+        return mergeUsersList(firestoreUsers, localUsers);
       } catch (err) {
         console.error('Error fetching users from Firestore:', err);
-        return getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+        return localUsers;
       }
     } else {
-      return getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+      return localUsers;
     }
   },
 
   async updateUserRole(userId: string, role: UserRole): Promise<User> {
     await delay(150);
-    if (shouldUseFirebaseSync()) {
-      const userRef = doc(firestore, 'users', userId);
-      await updateDoc(userRef, { role });
-      const updatedDoc = await getDoc(userRef);
-      const updatedUser = updatedDoc.data() as User;
-
-      // Sync active user role if updating self
-      const currentUser = localStorage.getItem(LOCAL_STORAGE_KEYS.CURRENT_USER);
-      if (currentUser) {
-        const parsed: User = JSON.parse(currentUser);
-        if (parsed.id === userId) {
-          parsed.role = role;
-          localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(parsed));
-        }
-      }
-
-      return updatedUser;
-    } else {
-      const users = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
-      const index = users.findIndex((u) => u.id === userId);
-      if (index === -1) throw new Error('User not found');
+    
+    // 1. Always update local storage list if present
+    const users = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+    const index = users.findIndex((u) => u.id === userId);
+    let updatedUser: User | null = null;
+    if (index !== -1) {
       users[index].role = role;
       setLocalData(LOCAL_STORAGE_KEYS.USERS, users);
+      updatedUser = users[index];
+    }
 
-      const currentUser = localStorage.getItem(LOCAL_STORAGE_KEYS.CURRENT_USER);
-      if (currentUser) {
-        const parsed: User = JSON.parse(currentUser);
-        if (parsed.id === userId) {
-          parsed.role = role;
-          localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(parsed));
+    // 2. Update Firestore if active
+    if (shouldUseFirebaseSync()) {
+      try {
+        const userRef = doc(firestore, 'users', userId);
+        const userDoc = await getDoc(userRef);
+        
+        if (userDoc.exists()) {
+          await updateDoc(userRef, { role });
+          const fresh = await getDoc(userRef);
+          updatedUser = fresh.data() as User;
+        } else if (index !== -1) {
+          // Sync simulated local-only user to Firestore
+          const newUser = { ...users[index], role };
+          await setDoc(userRef, newUser);
+          updatedUser = newUser;
+        } else {
+          // Create user document shell
+          const newUser: User = {
+            id: userId,
+            name: 'Employee',
+            email: userId.includes('@') ? userId : `${userId}@company.com`,
+            role,
+            created_at: new Date().toISOString()
+          };
+          await setDoc(userRef, newUser);
+          updatedUser = newUser;
         }
+      } catch (err) {
+        console.error('Error updating user role in Firestore:', err);
       }
+    }
 
-      return users[index];
+    // 3. Sync active user role if updating self
+    const currentUser = localStorage.getItem(LOCAL_STORAGE_KEYS.CURRENT_USER);
+    if (currentUser) {
+      const parsed: User = JSON.parse(currentUser);
+      if (parsed.id === userId) {
+        parsed.role = role;
+        localStorage.setItem(LOCAL_STORAGE_KEYS.CURRENT_USER, JSON.stringify(parsed));
+      }
+    }
+
+    if (updatedUser) {
+      return updatedUser;
+    }
+    throw new Error('User not found');
+  },
+
+  async deleteUser(userId: string): Promise<void> {
+    await delay(150);
+    
+    // Always delete from local storage
+    const users = getLocalData<User>(LOCAL_STORAGE_KEYS.USERS);
+    const filtered = users.filter((u) => u.id !== userId);
+    setLocalData(LOCAL_STORAGE_KEYS.USERS, filtered);
+
+    // Also delete from Firestore if active
+    if (shouldUseFirebaseSync()) {
+      try {
+        await deleteDoc(doc(firestore, 'users', userId));
+      } catch (err) {
+        console.error('Error deleting user from Firestore:', err);
+      }
     }
   },
 
@@ -571,7 +878,19 @@ export const dbService = {
     await delay(150);
     if (shouldUseFirebaseSync()) {
       try {
-        const qSnap = await getDocs(collection(firestore, 'requests'));
+        const requestsCol = collection(firestore, 'requests');
+        let qSnap = await getDocs(requestsCol);
+        if (qSnap.empty) {
+          const batchPromises = DEFAULT_REQUESTS.map(req => {
+            const { id, ...reqData } = req;
+            return setDoc(doc(firestore, 'requests', id), {
+              ...reqData,
+              created_at: reqData.created_at || new Date().toISOString()
+            });
+          });
+          await Promise.all(batchPromises);
+          qSnap = await getDocs(requestsCol);
+        }
         const [users, items] = await Promise.all([
           dbService.getAllUsers(),
           dbService.getItems()
@@ -729,7 +1048,16 @@ export const dbService = {
     await delay(150);
     if (shouldUseFirebaseSync()) {
       try {
-        const qSnap = await getDocs(collection(firestore, 'assigned_items'));
+        const assignedCol = collection(firestore, 'assigned_items');
+        let qSnap = await getDocs(assignedCol);
+        if (qSnap.empty) {
+          const batchPromises = DEFAULT_ASSIGNED_ITEMS.map(as => {
+            const { id, ...asData } = as;
+            return setDoc(doc(firestore, 'assigned_items', id), asData);
+          });
+          await Promise.all(batchPromises);
+          qSnap = await getDocs(assignedCol);
+        }
         const [users, items] = await Promise.all([
           dbService.getAllUsers(),
           dbService.getItems()
@@ -832,7 +1160,19 @@ export const dbService = {
     await delay(150);
     if (shouldUseFirebaseSync()) {
       try {
-        const qSnap = await getDocs(collection(firestore, 'complaints'));
+        const complaintsCol = collection(firestore, 'complaints');
+        let qSnap = await getDocs(complaintsCol);
+        if (qSnap.empty) {
+          const batchPromises = DEFAULT_COMPLAINTS.map(cp => {
+            const { id, ...cpData } = cp;
+            return setDoc(doc(firestore, 'complaints', id), {
+              ...cpData,
+              created_at: cpData.created_at || new Date().toISOString()
+            });
+          });
+          await Promise.all(batchPromises);
+          qSnap = await getDocs(complaintsCol);
+        }
         const [users, items] = await Promise.all([
           dbService.getAllUsers(),
           dbService.getItems()
@@ -891,36 +1231,56 @@ export const dbService = {
 
   async submitComplaint(userId: string, itemId: string, message: string): Promise<Complaint> {
     await delay(150);
+    const complaints = getLocalData<Complaint>(LOCAL_STORAGE_KEYS.COMPLAINTS);
+    const newComp: Complaint = {
+      id: `comp-${Date.now()}`,
+      user_id: userId,
+      item_id: itemId,
+      message,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+    };
+    complaints.push(newComp);
+    setLocalData(LOCAL_STORAGE_KEYS.COMPLAINTS, complaints);
+
     if (shouldUseFirebaseSync()) {
       const docRef = await addDoc(collection(firestore, 'complaints'), {
         user_id: userId,
         item_id: itemId,
         message,
         status: 'pending',
-        created_at: new Date().toISOString()
+        created_at: newComp.created_at
       });
-      return { id: docRef.id, user_id: userId, item_id: itemId, message, status: 'pending', created_at: new Date().toISOString() };
+      const index = complaints.findIndex(c => c.id === newComp.id);
+      if (index !== -1) {
+        complaints[index].id = docRef.id;
+        setLocalData(LOCAL_STORAGE_KEYS.COMPLAINTS, complaints);
+      }
+      return { ...newComp, id: docRef.id };
     } else {
-      const complaints = getLocalData<Complaint>(LOCAL_STORAGE_KEYS.COMPLAINTS);
-      const newComp: Complaint = {
-        id: `comp-${Date.now()}`,
-        user_id: userId,
-        item_id: itemId,
-        message,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-      };
-      complaints.push(newComp);
-      setLocalData(LOCAL_STORAGE_KEYS.COMPLAINTS, complaints);
       return newComp;
     }
   },
 
-  async updateComplaintStatus(complaintId: string, status: 'pending' | 'resolved'): Promise<Complaint> {
+  async updateComplaintStatus(
+    complaintId: string, 
+    status: 'pending' | 'resolved' | 'unsolved',
+    admin_feedback?: string
+  ): Promise<Complaint> {
     await delay(150);
+    const resolved_at = (status === 'resolved' || status === 'unsolved') ? new Date().toISOString() : undefined;
     if (shouldUseFirebaseSync()) {
       const compRef = doc(firestore, 'complaints', complaintId);
-      await updateDoc(compRef, { status });
+      const updates: any = { status };
+      if (admin_feedback !== undefined) {
+        updates.admin_feedback = admin_feedback;
+      }
+      if (resolved_at !== undefined) {
+        updates.resolved_at = resolved_at;
+      } else {
+        updates.resolved_at = null;
+      }
+      await updateDoc(compRef, updates);
       const updatedDoc = await getDoc(compRef);
       return { id: complaintId, ...updatedDoc.data() } as Complaint;
     } else {
@@ -928,6 +1288,14 @@ export const dbService = {
       const index = complaints.findIndex((c) => c.id === complaintId);
       if (index === -1) throw new Error('Complaint not found');
       complaints[index].status = status;
+      if (admin_feedback !== undefined) {
+        complaints[index].admin_feedback = admin_feedback;
+      }
+      if (resolved_at !== undefined) {
+        complaints[index].resolved_at = resolved_at;
+      } else {
+        delete complaints[index].resolved_at;
+      }
       setLocalData(LOCAL_STORAGE_KEYS.COMPLAINTS, complaints);
       return complaints[index];
     }

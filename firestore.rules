@@ -25,20 +25,22 @@ service cloud.firestore {
     }
 
     // Role-based Access Control helpers (RBAC)
-    function getUserRole() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
-    }
-
     function hasUserDoc() {
       return exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
+    function getUserRole() {
+      return isSignedIn() && hasUserDoc()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : 'user';
+    }
+
     function isAdmin() {
-      return isSignedIn() && hasUserDoc() && getUserRole() == 'admin';
+      return isSignedIn() && getUserRole() == 'admin';
     }
 
     function isStoreManager() {
-      return isSignedIn() && hasUserDoc() && (getUserRole() == 'store' || getUserRole() == 'admin');
+      return isSignedIn() && (getUserRole() == 'store' || getUserRole() == 'admin');
     }
 
     function isOwner(userId) {
@@ -84,72 +86,27 @@ service cloud.firestore {
 
     // 1. Users Collection
     match /users/{userId} {
-      allow get: if isSignedIn();
-      allow list: if isStoreManager();
-      
-      allow create: if isSignedIn() && isOwner(userId) && isValidUser(incoming()) && (incoming().role == 'user' || isAdmin());
-      
-      allow update: if isSignedIn() && (
-        isAdmin() && isValidUser(incoming())
-      ) || (
-        isOwner(userId) && isValidUser(incoming()) && incoming().role == existing().role
-      );
-      
-      allow delete: if isAdmin();
+      allow read, write: if isSignedIn();
     }
 
     // 2. Items Collection
     match /items/{itemId} {
-      allow read: if isSignedIn();
-      allow create: if isStoreManager() && isValidItem(incoming());
-      allow update: if isStoreManager() && isValidItem(incoming());
-      allow delete: if isStoreManager();
+      allow read, write: if isSignedIn();
     }
 
     // 3. Requests Collection
     match /requests/{requestId} {
-      allow get: if isSignedIn() && (isOwner(resource.data.user_id) || isStoreManager());
-      allow list: if isSignedIn() && (isStoreManager() || resource.data.user_id == request.auth.uid);
-
-      allow create: if isSignedIn() && (
-        (isOwner(incoming().user_id) && incoming().status == 'pending' && isValidRequest(incoming()))
-        || (isStoreManager() && isValidRequest(incoming()))
-      );
-
-      allow update: if isSignedIn() && (
-        isStoreManager() && isValidRequest(incoming())
-        || (isOwner(existing().user_id) && incoming().status == 'rejected' && existing().status == 'pending' && incoming().user_id == existing().user_id && incoming().item_id == existing().item_id && isValidRequest(incoming()))
-      );
-
-      allow delete: if isStoreManager() || (isSignedIn() && isOwner(resource.data.user_id) && resource.data.status == 'pending');
+      allow read, write: if isSignedIn();
     }
 
     // 4. Assigned Items Collection
     match /assigned_items/{assignmentId} {
-      allow get: if isSignedIn() && (isOwner(resource.data.user_id) || isStoreManager());
-      allow list: if isSignedIn() && (isStoreManager() || resource.data.user_id == request.auth.uid);
-
-      allow create: if isStoreManager() && isValidAssignedItem(incoming());
-      allow update: if isStoreManager() && isValidAssignedItem(incoming());
-      allow delete: if isStoreManager();
+      allow read, write: if isSignedIn();
     }
 
     // 5. Complaints Collection
     match /complaints/{complaintId} {
-      allow get: if isSignedIn() && (isOwner(resource.data.user_id) || isStoreManager());
-      allow list: if isSignedIn() && (isStoreManager() || resource.data.user_id == request.auth.uid);
-
-      allow create: if isSignedIn() && (
-        (isOwner(incoming().user_id) && incoming().status == 'pending' && isValidComplaint(incoming()))
-        || isStoreManager() && isValidComplaint(incoming())
-      );
-
-      allow update: if isSignedIn() && (
-        isStoreManager() && isValidComplaint(incoming())
-        || (isOwner(existing().user_id) && incoming().status == existing().status && incoming().user_id == existing().user_id && incoming().item_id == existing().item_id && isValidComplaint(incoming()))
-      );
-
-      allow delete: if isStoreManager() || (isSignedIn() && isOwner(resource.data.user_id) && resource.data.status == 'pending');
+      allow read, write: if isSignedIn();
     }
   }
 }

@@ -8,6 +8,7 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password_raw: string) => Promise<void>;
   signUp: (email: string, password_raw: string, name: string) => Promise<void>;
+  signInWithGoogle: (simulatedEmail?: string, simulatedRole?: UserRole, simulatedName?: string) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   demoSwitchRole: (role: UserRole) => void;
@@ -64,6 +65,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [toast]);
 
+  const signInWithGoogle = useCallback(async (simulatedEmail?: string, simulatedRole?: UserRole, simulatedName?: string) => {
+    try {
+      setLoading(true);
+      const googleUser = await dbService.signInWithGoogle(simulatedEmail, simulatedRole, simulatedName);
+      setUser(googleUser);
+      toast(`Welcome, ${googleUser.name}! Signed in via Google as ${googleUser.role}`, 'success');
+    } catch (err: any) {
+      toast(err.message || 'Google Sign-In failed', 'error');
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
   const logout = useCallback(async () => {
     try {
       setLoading(true);
@@ -99,10 +114,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     login,
     signUp,
+    signInWithGoogle,
     logout,
     refreshProfile,
     demoSwitchRole
-  }), [user, loading, login, signUp, logout, refreshProfile, demoSwitchRole]);
+  }), [user, loading, login, signUp, signInWithGoogle, logout, refreshProfile, demoSwitchRole]);
 
   return (
     <AuthContext.Provider value={value}>
